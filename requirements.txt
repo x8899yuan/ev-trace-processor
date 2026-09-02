@@ -1,0 +1,2 @@
+# No third-party Python packages are required for the current archive-processing workflow.
+# Add one pinned dependency per line when external packages are introduced.

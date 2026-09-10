@@ -11,10 +11,12 @@ from config import load_config
 from exceptions import TraceProcessorError
 from models import ProcessingResult
 from trace_detector import TraceDetector
+from trace_reader import TraceReader, TraceReaderError
+from trace_reporter import TraceReporter
 
 
 def process_trace_package() -> ProcessingResult:
-    """Run the complete KPM trace reconstruction workflow."""
+    """Merge, validate, extract, and locate vehicle trace files."""
 
     config = load_config()
     config.output_folder.mkdir(parents=True, exist_ok=True)
@@ -35,13 +37,16 @@ def process_trace_package() -> ProcessingResult:
 
     # 3. Merge the numbered chunks
     merger = ArchiveMerger(config)
-    merger.merge(volumes=volumes, output_file=merged_archive)
+    merger.merge(
+        volumes=volumes,
+        output_file=merged_archive,
+    )
 
     # 4. Validate the reconstructed 7z archive
     validator = ArchiveValidator(config.seven_zip_path)
     validator.validate_archive(merged_archive)
 
-    # 5. Extract the 7z archive
+    # 5. Extract the reconstructed 7z archive
     extraction_folder = config.output_folder / "Extracted"
     extractor = ArchiveExtractor(config)
     extractor.extract_7z(
@@ -54,7 +59,7 @@ def process_trace_package() -> ProcessingResult:
         root_folder=extraction_folder
     )
 
-    # 7. Detect final vehicle trace files
+    # 7. Locate final vehicle trace files
     final_trace_files = TraceDetector.find_trace_files(
         extraction_folder
     )
@@ -66,8 +71,39 @@ def process_trace_package() -> ProcessingResult:
     )
 
 
-def print_result(result: ProcessingResult) -> None:
-    """Print the final processing summary."""
+def analyze_trace_files(result: ProcessingResult) -> None:
+    """Analyze supported trace files and print metadata reports."""
+
+    if not result.final_trace_files:
+        return
+
+    reader = TraceReader()
+    reporter = TraceReporter(top_can_id_limit=20)
+
+    print("\nStarting trace metadata analysis...")
+
+    for trace_file in result.final_trace_files:
+        suffix = trace_file.suffix.lower()
+
+        if suffix not in TraceReader.SUPPORTED_FILE_TYPES:
+            print(
+                f"\nSkipping metadata analysis for unsupported type: "
+                f"{trace_file.name}"
+            )
+            continue
+
+        print(f"\nAnalyzing: {trace_file}")
+
+        try:
+            metadata = reader.analyze(trace_file)
+            reporter.print_report(metadata)
+        except TraceReaderError as error:
+            print("\nTRACE ANALYSIS ERROR")
+            print(error)
+
+
+def print_processing_result(result: ProcessingResult) -> None:
+    """Print the archive-processing summary."""
 
     print("\n" + "=" * 70)
     print("KPM TRACE PROCESSING COMPLETED")
@@ -77,6 +113,7 @@ def print_result(result: ProcessingResult) -> None:
 
     if result.final_trace_files:
         print("\nFinal trace files:")
+
         for trace_file in result.final_trace_files:
             print(f"  {trace_file}")
             print(f"  Size: {trace_file.stat().st_size:,} bytes")
@@ -94,23 +131,29 @@ def main() -> int:
 
     try:
         result = process_trace_package()
-        print_result(result)
+        print_processing_result(result)
+        analyze_trace_files(result)
         return 0
+
     except TraceProcessorError as error:
         print("\nPROCESSING ERROR")
         print(error)
         return 1
+
     except FileNotFoundError as error:
         print("\nFILE NOT FOUND")
         print(error)
         return 2
+
     except PermissionError as error:
         print("\nPERMISSION ERROR")
         print(error)
         return 3
+
     except KeyboardInterrupt:
         print("\nProcessing canceled.")
         return 130
+
     except Exception as error:
         print("\nUNEXPECTED ERROR")
         print(error)

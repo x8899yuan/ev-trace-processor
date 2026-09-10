@@ -1,22 +1,28 @@
 from pathlib import Path
 
+
 TRACE_TYPES = {
     ".blf",
     ".asc",
     ".pcap",
     ".pcapng",
     ".mf4",
+    ".mdf",
+    ".esotrace",
 }
 
 
-def find_trace_files(folder: Path):
-    traces = []
+class TraceDetector:
+    """Locate supported vehicle trace files recursively."""
 
-    for file in folder.rglob("*"):
-        if (
-            file.is_file()
-            and file.suffix.lower() in TRACE_TYPES
-        ):
-            traces.append(file)
+    @staticmethod
+    def find_trace_files(folder: Path) -> list[Path]:
+        """Return all recognized trace files under a folder."""
 
-    return traces
+        trace_files = [
+            path
+            for path in folder.rglob("*")
+            if path.is_file() and path.suffix.lower() in TRACE_TYPES
+        ]
+
+        return sorted(trace_files, key=lambda path: str(path).lower())

@@ -1,2 +1,3 @@
-# No third-party Python packages are required for the current archive-processing workflow.
-# Add one pinned dependency per line when external packages are introduced.
+# No external Python packages are required.
+# Python 3.10 or newer is recommended.
+# 7-Zip must be installed separately.

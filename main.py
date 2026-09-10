@@ -1,91 +1,121 @@
-from pathlib import Path
+import sys
 
-from archive_discovery import discover_volumes
+from archive_discovery import (
+    discover_archive_volumes,
+    get_merged_archive_name,
+)
+from archive_extractor import ArchiveExtractor
 from archive_merger import ArchiveMerger
 from archive_validator import ArchiveValidator
-from archive_extractor import ArchiveExtractor
-from trace_detector import find_trace_files
+from config import load_config
+from exceptions import TraceProcessorError
+from models import ProcessingResult
+from trace_detector import TraceDetector
 
 
-SEVEN_ZIP = Path(r"C:\Program Files\7-Zip\7z.exe")
-INPUT_FOLDER = Path(r"C:\Temp\PnC Testing Traces\test")
-OUTPUT_FOLDER = INPUT_FOLDER / "Processed"
+def process_trace_package() -> ProcessingResult:
+    """Run the complete KPM trace reconstruction workflow."""
 
+    config = load_config()
+    config.output_folder.mkdir(parents=True, exist_ok=True)
 
-def process_archives() -> Path:
-    """Discover, merge, validate, and extract archive volumes."""
-    print("1. Discovering archive volumes...")
-    volumes = discover_volumes(INPUT_FOLDER)
+    # 1. Discover and verify numbered 7z chunks
+    volumes = discover_archive_volumes(config.input_folder)
+    print(f"Found {len(volumes)} archive volume(s).")
 
-    if not volumes:
-        raise FileNotFoundError(
-            f"No archive volumes were found in: {INPUT_FOLDER}"
+    for volume in volumes:
+        print(
+            f"{volume.volume_number:03d}: {volume.path.name} "
+            f"({volume.size_bytes:,} bytes)"
         )
 
-    print(f"   Found {len(volumes)} archive volume(s).")
+    # 2. Build the merged archive path
+    merged_archive_name = get_merged_archive_name(volumes[0])
+    merged_archive = config.output_folder / merged_archive_name
 
-    merged_archive = OUTPUT_FOLDER / volumes[0].path.name.removesuffix(".001")
+    # 3. Merge the numbered chunks
+    merger = ArchiveMerger(config)
+    merger.merge(volumes=volumes, output_file=merged_archive)
 
-    print("2. Merging archive volumes...")
-    ArchiveMerger.merge(volumes, merged_archive)
+    # 4. Validate the reconstructed 7z archive
+    validator = ArchiveValidator(config.seven_zip_path)
+    validator.validate_archive(merged_archive)
 
-    print("3. Validating merged archive...")
-    ArchiveValidator.test_archive(merged_archive, str(SEVEN_ZIP))
-
-    extraction_folder = OUTPUT_FOLDER / "Extracted"
-
-    print("4. Extracting archive...")
-    ArchiveExtractor.extract(
-        merged_archive,
-        extraction_folder,
-        str(SEVEN_ZIP),
+    # 5. Extract the 7z archive
+    extraction_folder = config.output_folder / "Extracted"
+    extractor = ArchiveExtractor(config)
+    extractor.extract_7z(
+        archive=merged_archive,
+        destination=extraction_folder,
     )
 
-    return extraction_folder
+    # 6. Extract ZIP files contained inside the 7z archive
+    extractor.extract_nested_zip_files(
+        root_folder=extraction_folder
+    )
+
+    # 7. Detect final vehicle trace files
+    final_trace_files = TraceDetector.find_trace_files(
+        extraction_folder
+    )
+
+    return ProcessingResult(
+        merged_archive=merged_archive,
+        extraction_folder=extraction_folder,
+        final_trace_files=final_trace_files,
+    )
 
 
-def locate_trace_files(extraction_folder: Path) -> list[Path]:
-    """Find supported trace files in the extraction folder."""
-    print("5. Searching for trace files...")
-    return find_trace_files(extraction_folder)
+def print_result(result: ProcessingResult) -> None:
+    """Print the final processing summary."""
+
+    print("\n" + "=" * 70)
+    print("KPM TRACE PROCESSING COMPLETED")
+    print("=" * 70)
+    print(f"Merged archive:\n{result.merged_archive}")
+    print(f"\nExtraction folder:\n{result.extraction_folder}")
+
+    if result.final_trace_files:
+        print("\nFinal trace files:")
+        for trace_file in result.final_trace_files:
+            print(f"  {trace_file}")
+            print(f"  Size: {trace_file.stat().st_size:,} bytes")
+    else:
+        print(
+            "\nNo BLF, ASC, PCAP, PCAPNG, MF4, MDF, "
+            "or ESOTRACE file was found."
+        )
+
+    print("=" * 70)
 
 
-def print_trace_summary(traces: list[Path]) -> None:
-    """Print a summary of discovered trace files."""
-    print("\nTrace Files Found:")
-    print("-" * 60)
-
-    if not traces:
-        print("No supported trace files were found.")
-        return
-
-    for index, trace in enumerate(traces, start=1):
-        print(f"{index}. {trace}")
-
-    print("-" * 60)
-    print(f"Total trace files found: {len(traces)}")
-
-
-def main() -> None:
-    """Run the EV Trace Processor application."""
-    print("=" * 60)
-    print("EV Trace Processor")
-    print("=" * 60)
-    print("Application started\n")
+def main() -> int:
+    """Application entry point."""
 
     try:
-        OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
-
-        extraction_folder = process_archives()
-        traces = locate_trace_files(extraction_folder)
-        print_trace_summary(traces)
-
-        print("\nApplication completed successfully")
-
+        result = process_trace_package()
+        print_result(result)
+        return 0
+    except TraceProcessorError as error:
+        print("\nPROCESSING ERROR")
+        print(error)
+        return 1
+    except FileNotFoundError as error:
+        print("\nFILE NOT FOUND")
+        print(error)
+        return 2
+    except PermissionError as error:
+        print("\nPERMISSION ERROR")
+        print(error)
+        return 3
+    except KeyboardInterrupt:
+        print("\nProcessing canceled.")
+        return 130
     except Exception as error:
-        print(f"\nApplication failed: {error}")
-        raise
+        print("\nUNEXPECTED ERROR")
+        print(error)
+        return 99
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

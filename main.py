@@ -5,9 +5,42 @@ from analyzers.trace_analyzer import TraceAnalyzer
 from exporters.html_reporter import HtmlReporter
 
 
-def generate_report(trace_file: str) -> str:
-    """Generate an HTML report for a supported trace file."""
+BLF_FOLDER = Path("data/blf")
 
+
+def select_blf_file() -> Path:
+    if not BLF_FOLDER.exists():
+        raise FileNotFoundError(f"BLF folder not found: {BLF_FOLDER}")
+
+    blf_files = sorted(BLF_FOLDER.glob("*.blf"))
+
+    if not blf_files:
+        raise FileNotFoundError(f"No .blf files found in {BLF_FOLDER}")
+
+    print(f"
+Found {len(blf_files)} BLF file(s):
+")
+
+    for index, file_path in enumerate(blf_files, start=1):
+        print(f"[{index}] {file_path.name}")
+
+    while True:
+        selection = input("
+Select file number: ").strip()
+
+        try:
+            selection = int(selection)
+
+            if 1 <= selection <= len(blf_files):
+                return blf_files[selection - 1]
+
+        except ValueError:
+            pass
+
+        print("Invalid selection. Please try again.")
+
+
+def generate_report(trace_file: str) -> str:
     reader = create_reader(trace_file)
 
     analyzer = TraceAnalyzer()
@@ -27,28 +60,22 @@ def main() -> None:
     print("EV Trace Processor")
     print("=" * 70)
 
-    trace_file = input("Enter path to trace file (.blf): ").strip()
-
-    if not trace_file:
-        print("No trace file specified.")
-        return
-
-    trace_path = Path(trace_file)
-
-    if not trace_path.exists():
-        print(f"File not found: {trace_file}")
-        return
-
     try:
-        report_path = generate_report(trace_file)
+        trace_file = select_blf_file()
 
-        print()
+        print(f"
+Selected: {trace_file.name}")
+        print("Generating report...
+")
+
+        report_path = generate_report(str(trace_file))
+
         print("Report generated successfully")
         print(f"HTML Report: {report_path}")
 
     except Exception as exc:
-        print()
-        print("Report generation failed")
+        print("
+Report generation failed")
         print(str(exc))
 
 

@@ -1,83 +1,159 @@
+"""
+EV Trace Processor
+Automated BLF Processing Workflow
+"""
+
 from pathlib import Path
 
-from readers.reader_factory import create_reader
+from readers.reader_factory import ReaderFactory
 from analyzers.trace_analyzer import TraceAnalyzer
 from exporters.html_reporter import HtmlReporter
 
 
-BLF_FOLDER = Path("data/blf")
+def verify_report(report_path):
+    report_file = Path(report_path)
+
+    if not report_file.exists():
+        return False
+
+    if report_file.stat().st_size == 0:
+        return False
+
+    return True
 
 
-def select_blf_file() -> Path:
-    if not BLF_FOLDER.exists():
-        raise FileNotFoundError(f"BLF folder not found: {BLF_FOLDER}")
+def get_trace_files():
+    data_folder = Path("data/blf")
 
-    blf_files = sorted(BLF_FOLDER.glob("*.blf"))
+    if not data_folder.exists():
+        raise FileNotFoundError(
+            f"Folder not found: {data_folder.resolve()}"
+        )
 
-    if not blf_files:
-        raise FileNotFoundError(f"No .blf files found in {BLF_FOLDER}")
+    trace_files = sorted(data_folder.glob("*.blf"))
 
-    print(f"
-Found {len(blf_files)} BLF file(s):
-")
+    if not trace_files:
+        raise FileNotFoundError(
+            f"No BLF files found in {data_folder.resolve()}"
+        )
 
-    for index, file_path in enumerate(blf_files, start=1):
-        print(f"[{index}] {file_path.name}")
-
-    while True:
-        selection = input("
-Select file number: ").strip()
-
-        try:
-            selection = int(selection)
-
-            if 1 <= selection <= len(blf_files):
-                return blf_files[selection - 1]
-
-        except ValueError:
-            pass
-
-        print("Invalid selection. Please try again.")
+    return trace_files
 
 
-def generate_report(trace_file: str) -> str:
-    reader = create_reader(trace_file)
+def print_summary(
+    total_found,
+    successful_files,
+    failed_files,
+    deleted_files,
+    generated_reports,
+):
+    print("")
+    print("=" * 60)
+    print("EV TRACE PROCESSOR SUMMARY")
+    print("=" * 60)
 
-    analyzer = TraceAnalyzer()
-    report = analyzer.analyze(reader, trace_file)
+    print(f"Files Found : {total_found}")
+    print(f"Processed   : {len(successful_files)}")
+    print(f"Failed      : {len(failed_files)}")
+    print(f"Deleted     : {len(deleted_files)}")
 
-    report_name = f"{Path(trace_file).stem}_report.html"
-    output_file = Path("reports") / report_name
+    print("Generated Reports")
+    print("-" * 60)
 
-    reporter = HtmlReporter()
-    report_path = reporter.export(report, str(output_file))
+    if generated_reports:
+        for report in generated_reports:
+            print(report)
+    else:
+        print("None")
 
-    return report_path
+    if failed_files:
+        print("Failed Files")
+        print("-" * 60)
+
+        for item in failed_files:
+            print(f"{item['file']} -> {item['error']}")
+
+    print("=" * 60)
 
 
-def main() -> None:
+def main():
+    print("" + "=" * 70)
+    print("EV TRACE PROCESSOR")
     print("=" * 70)
-    print("EV Trace Processor")
-    print("=" * 70)
+
+    successful_files = []
+    failed_files = []
+    deleted_files = []
+    generated_reports = []
 
     try:
-        trace_file = select_blf_file()
+        trace_files = get_trace_files()
 
-        print(f"
-Selected: {trace_file.name}")
-        print("Generating report...
-")
+        print(f"Found {len(trace_files)} BLF file(s)")
 
-        report_path = generate_report(str(trace_file))
+        for trace_file in trace_files:
+            print(f"Processing: {trace_file.name}")
 
-        print("Report generated successfully")
-        print(f"HTML Report: {report_path}")
+            try:
+                reader = ReaderFactory.get_reader(trace_file)
+
+                messages = reader.read(trace_file)
+
+                analyzer = TraceAnalyzer()
+
+                analysis_results = analyzer.analyze(
+                    messages,
+                    trace_file,
+                )
+
+                reporter = HtmlReporter()
+
+                report_path = reporter.generate(
+                    analysis_results,
+                    trace_file,
+                )
+
+                if verify_report(report_path):
+                    generated_reports.append(str(report_path))
+
+                    trace_file.unlink()
+
+                    successful_files.append(trace_file.name)
+                    deleted_files.append(trace_file.name)
+
+                    print(f"  SUCCESS - Report verified")
+                    print(f"  DELETED - {trace_file.name}")
+                else:
+                    failed_files.append(
+                        {
+                            'file': trace_file.name,
+                            'error': 'Report verification failed',
+                        }
+                    )
+
+                    print("  FAILED - Report verification failed")
+
+            except Exception as exc:
+                failed_files.append(
+                    {
+                        'file': trace_file.name,
+                        'error': str(exc),
+                    }
+                )
+
+                print(f"  FAILED - {exc}")
+
+        print_summary(
+            total_found=len(trace_files),
+            successful_files=successful_files,
+            failed_files=failed_files,
+            deleted_files=deleted_files,
+            generated_reports=generated_reports,
+        )
 
     except Exception as exc:
-        print("
-Report generation failed")
-        print(str(exc))
+        print(f"ERROR: {exc}")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
